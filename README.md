@@ -117,8 +117,8 @@ at.** It is off by default for that reason.
 
 ## Related projects
 
-Pairs with [bundlebuild](../bundlebuild) (the bundle index it produces is a valid manifest)
-and [chronology](../chronology). See also [sg-deadline](../sg-deadline).
+Pairs with [bundlebuild](https://github.com/kevanwee/bundlebuild) (the bundle index it produces is a valid manifest)
+and [chronology](https://github.com/kevanwee/chronology). See also [sg-deadline](https://github.com/kevanwee/sg-deadline).
 
 ## License
 
