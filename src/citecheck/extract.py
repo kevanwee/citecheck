@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .patterns import CASE_PATTERNS, SENTENCE_BOUNDARY, STATUTE_PATTERNS
 
@@ -14,6 +14,14 @@ class CitationKind(StrEnum):
     CASE_NEUTRAL = "case_neutral"
     CASE_REPORT = "case_report"
     STATUTE = "statute"
+
+
+class Mention(BaseModel):
+    raw: str
+    start: int
+    end: int
+    pinpoint: str | None = None
+    context: str
 
 
 class Citation(BaseModel):
@@ -31,6 +39,7 @@ class Citation(BaseModel):
     end: int
     context: str  # the sentence the citation sits in; the proposition it is cited for
     occurrences: int = 1
+    mentions: list[Mention] = Field(default_factory=list)
 
     @property
     def url_hint(self) -> str | None:
@@ -54,17 +63,14 @@ def _norm_ws(s: str) -> str:
 
 
 def _sentence_around(text: str, start: int, end: int) -> str:
-    # Find the sentence containing [start, end). Cheap: split on boundaries, pick the span.
-    pos = 0
-    for sent in SENTENCE_BOUNDARY.split(text):
-        seg_end = pos + len(sent)
-        if pos <= start < seg_end + 1:
-            return _norm_ws(sent)
-        pos = seg_end + 1  # +1 for the whitespace consumed by the split
-        # SENTENCE_BOUNDARY consumes variable whitespace; recompute precisely
-        pos = text.find(sent, pos - 1) if pos - 1 >= 0 else pos
-        pos = pos + len(sent) if pos >= 0 else seg_end + 1
-    return _norm_ws(text[max(0, start - 160): end + 160])
+    left, right = 0, len(text)
+    for boundary in SENTENCE_BOUNDARY.finditer(text):
+        if boundary.end() <= start:
+            left = boundary.end()
+        elif boundary.start() >= end:
+            right = boundary.start()
+            break
+    return _norm_ws(text[left:right])
 
 
 def _case_key(raw: str, court: str, year: str, number: str, volume: str | None) -> str:
@@ -83,10 +89,12 @@ def extract_citations(text: str) -> list[Citation]:
     order: list[str] = []
 
     def add(c: Citation) -> None:
+        mention = Mention(**c.model_dump(include={"raw", "start", "end", "pinpoint", "context"}))
         if c.key in found:
             found[c.key].occurrences += 1
-            # Keep the first pinpoint seen; record that others exist via occurrences.
+            found[c.key].mentions.append(mention)
             return
+        c.mentions = [mention]
         found[c.key] = c
         order.append(c.key)
 

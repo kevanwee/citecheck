@@ -11,10 +11,13 @@ Design:
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from enum import StrEnum
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Protocol
 
@@ -97,7 +100,18 @@ class HttpExistenceResolver:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 final = resp.geturl()
                 if resp.status == 200 and _looks_like_judgment(final, citation):
-                    return Resolution(Status.EXISTS, self.name, final)
+                    parser = _IdentityMetadata()
+                    parser.feed(resp.read(262_144).decode("utf-8", errors="replace"))
+                    identity = " ".join(parser.values)
+                    expected = r"\s+".join(re.escape(p) for p in citation.key.split())
+                    if re.search(expected + r"(?!\d)", identity):
+                        return Resolution(Status.EXISTS, self.name, final,
+                                          title=" ".join(parser.title).strip() or None,
+                                          note="Matched publisher identity metadata; pinpoints, "
+                                               "propositions and currency not checked.")
+                    return Resolution(Status.AMBIGUOUS, self.name, final,
+                                      note="Page responded but identity metadata did not "
+                                           "confirm the exact citation.")
                 return Resolution(Status.AMBIGUOUS, self.name, final,
                                   note=f"HTTP {resp.status}; page may not be the judgment")
         except urllib.error.HTTPError as e:
@@ -109,8 +123,36 @@ class HttpExistenceResolver:
 
 
 def _looks_like_judgment(final_url: str, citation: Citation) -> bool:
-    # Some sites redirect unknown ids to a search page instead of 404ing.
-    return str(citation.number) in final_url and str(citation.year) in final_url
+    expected = urllib.parse.urlsplit(citation.url_hint or "")
+    actual = urllib.parse.urlsplit(final_url)
+    return (actual.scheme == "https" and actual.hostname == expected.hostname
+            and actual.path.rstrip("/") == expected.path.rstrip("/"))
+
+
+class _IdentityMetadata(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_title = False
+        self.title = []
+        self.values = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title":
+            self.in_title = True
+        if tag == "meta":
+            attr = dict(attrs)
+            name = (attr.get("name") or attr.get("property") or "").lower()
+            if name in {"citation", "citation_title", "dc.title", "dc.identifier", "og:title"}:
+                self.values.append(attr.get("content") or "")
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title.append(data)
+            self.values.append(data)
 
 
 class CompositeResolver:
